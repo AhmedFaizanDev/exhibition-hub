@@ -477,11 +477,12 @@ const Transactions = () => {
       
       // Auto-generate invoice/bill after successful booking
       try {
-        if (result && result.transaction && result.lead) {
+        const leadForInvoice = result.lead ?? getLeadById(selectedLead);
+        if (result?.transaction && leadForInvoice) {
           const invoiceNumber = result.transaction.transaction_number.replace('TXN', 'INV');
           const invoiceData = buildBookingInvoiceData(
             result.transaction,
-            result.lead,
+            leadForInvoice,
             result.items,
             invoiceNumber
           );

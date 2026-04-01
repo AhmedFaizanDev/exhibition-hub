@@ -39,7 +39,7 @@ interface DataContextType {
   deleteService: (id: string) => Promise<void>;
   addServiceAllocation: (allocation: Omit<ServiceAllocation, 'id' | 'created_at'>) => Promise<void>;
   removeServiceAllocation: (id: string) => Promise<void>;
-  addTransaction: (transaction: Omit<Transaction, 'id' | 'transaction_number' | 'created_at' | 'updated_at'>, items: Omit<TransactionItem, 'id' | 'transaction_id' | 'created_at'>[], selectedStallId?: string) => Promise<{ transaction: Transaction; items: TransactionItem[]; lead: Lead }>;
+  addTransaction: (transaction: Omit<Transaction, 'id' | 'transaction_number' | 'created_at' | 'updated_at'>, items: Omit<TransactionItem, 'id' | 'transaction_id' | 'created_at'>[], selectedStallId?: string) => Promise<{ transaction: Transaction; items: TransactionItem[]; lead: Lead | null }>;
   updateTransaction: (id: string, updates: Partial<Transaction>) => Promise<void>;
   cancelTransaction: (id: string) => Promise<void>;
   removeServiceFromTransaction: (transactionId: string, itemId: string) => Promise<void>;
@@ -489,7 +489,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       const { amount_paid, payment_status, lead, ...transactionData } = transaction;
-      return await api.post<{ transaction: Transaction; items: TransactionItem[]; lead: Lead }>(
+      return await api.post<{ transaction: Transaction; items: TransactionItem[]; lead: Lead | null }>(
         '/transactions',
         {
           transaction: { ...transactionData, exhibition_id: currentExhibitionId },

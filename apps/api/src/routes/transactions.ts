@@ -6,6 +6,37 @@ import { exhibitionScope } from '../middleware/exhibitionScope.js';
 
 const router = Router();
 
+/** Accept nested `{ transaction, items, selectedStallId }` or legacy flat body with transaction fields + items. */
+function parseCreateTransactionBody(body: Record<string, unknown>): {
+  transaction: Record<string, unknown>;
+  items: unknown[];
+  selectedStallId: string | undefined;
+} {
+  const b = body ?? {};
+  const nested = b.transaction;
+  if (
+    nested !== null &&
+    typeof nested === 'object' &&
+    !Array.isArray(nested) &&
+    Array.isArray(b.items)
+  ) {
+    return {
+      transaction: nested as Record<string, unknown>,
+      items: b.items,
+      selectedStallId: typeof b.selectedStallId === 'string' ? b.selectedStallId : undefined,
+    };
+  }
+  const { items, selectedStallId, ...transaction } = b as Record<string, unknown> & {
+    items?: unknown[];
+    selectedStallId?: string;
+  };
+  return {
+    transaction: transaction as Record<string, unknown>,
+    items: Array.isArray(items) ? items : [],
+    selectedStallId: typeof selectedStallId === 'string' ? selectedStallId : undefined,
+  };
+}
+
 // --------------- GET transactions ---------------
 
 router.get(
@@ -47,18 +78,27 @@ router.get(
 router.post('/', async (req: Request, res: Response, next: NextFunction) => {
   const client = await pool.connect();
   try {
-    const { transaction, items, selectedStallId } = req.body;
+    const { transaction, items, selectedStallId } = parseCreateTransactionBody(
+      req.body as Record<string, unknown>,
+    );
 
-    if (!transaction) throw new AppError(400, 'Transaction data is required');
+    if (!transaction || Object.keys(transaction).length === 0) {
+      throw new AppError(400, 'Transaction data is required');
+    }
     if (!transaction.exhibition_id) throw new AppError(400, 'exhibition_id is required');
     if (!transaction.lead_id) throw new AppError(400, 'lead_id is required');
     if (!items || items.length === 0) throw new AppError(400, 'At least one item is required');
-    if (transaction.total_amount < 0) throw new AppError(400, 'Transaction total cannot be negative');
 
-    for (const item of items) {
+    const totalAmt = Number(transaction.total_amount);
+    if (Number.isNaN(totalAmt)) throw new AppError(400, 'total_amount must be a valid number');
+    if (totalAmt < 0) throw new AppError(400, 'Transaction total cannot be negative');
+
+    for (const item of items as Record<string, unknown>[]) {
       if (item.item_type === 'stall' && !item.stall_id) throw new AppError(400, 'stall_id required for stall items');
       if (item.item_type === 'service' && !item.service_id) throw new AppError(400, 'service_id required for service items');
-      if (item.final_price < 0) throw new AppError(400, 'Item price cannot be negative');
+      const finalPrice = Number(item.final_price);
+      if (Number.isNaN(finalPrice)) throw new AppError(400, 'Item final_price must be a valid number');
+      if (finalPrice < 0) throw new AppError(400, 'Item price cannot be negative');
     }
 
     // Step 1: Generate transaction number
@@ -92,7 +132,8 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
 
     // Step 3: Insert transaction items
     const insertedItems = [];
-    for (const item of items) {
+    for (const raw of items as Record<string, unknown>[]) {
+      const item = raw;
       const { rows: itemRows } = await client.query(
         `INSERT INTO transaction_items (
           exhibition_id, transaction_id, item_type,
@@ -104,14 +145,16 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
           txnData.exhibition_id, createdTxn.id, item.item_type,
           item.stall_id ?? null, item.service_id ?? null,
           item.item_name, item.size ?? null,
-          item.base_price ?? 0, item.addon_price ?? 0, item.final_price ?? 0,
+          Number(item.base_price) || 0,
+          Number(item.addon_price) || 0,
+          Number(item.final_price) || 0,
         ],
       );
       insertedItems.push(itemRows[0]);
     }
 
     // Step 4: Service allocations + increment sold_quantity
-    const serviceItems = items.filter((i: any) => i.item_type === 'service');
+    const serviceItems = (items as Record<string, unknown>[]).filter((i) => i.item_type === 'service');
     if (serviceItems.length > 0 && selectedStallId) {
       for (const item of serviceItems) {
         if (!item.service_id) continue;
@@ -139,9 +182,12 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
 
     await client.query('COMMIT');
 
+    const { rows: leadRows } = await pool.query('SELECT * FROM leads WHERE id = $1', [txnData.lead_id]);
+
     res.status(201).json({
       transaction: createdTxn,
       items: insertedItems,
+      lead: leadRows[0] ?? null,
     });
   } catch (err) {
     await client.query('ROLLBACK');

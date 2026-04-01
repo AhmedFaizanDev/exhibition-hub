@@ -1,12 +1,15 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import bcrypt from 'bcryptjs';
 import { pool } from '../config/db.js';
+import { requireAdmin } from '../middleware/auth.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { cacheMiddleware } from '../cache/cacheMiddleware.js';
 import { CacheKeys, CacheTTL } from '../cache/cacheKeys.js';
 import { invalidateProfiles, invalidateUserRoles } from '../cache/invalidation.js';
 
 const router = Router();
+
+router.use(requireAdmin);
 
 // --------------- GET users (profiles + roles) ---------------
 
@@ -16,7 +19,7 @@ router.get(
   async (_req: Request, res: Response, next: NextFunction) => {
     try {
       const { rows: profiles } = await pool.query(
-        'SELECT * FROM profiles ORDER BY created_at DESC',
+        'SELECT id, email, full_name, phone, is_active, last_login_at, created_at, updated_at FROM profiles ORDER BY created_at DESC',
       );
       const { rows: roles } = await pool.query('SELECT * FROM user_roles');
 
@@ -77,21 +80,28 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
 router.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
-    const { email, full_name, phone } = req.body;
+    const { email, full_name, phone, password } = req.body;
 
     if (email !== undefined && !email.trim()) {
       throw new AppError(400, 'Email cannot be empty');
     }
 
+    if (password !== undefined && (!password || password.length < 6)) {
+      throw new AppError(400, 'Password must be at least 6 characters');
+    }
+
+    const passwordHash = password ? await bcrypt.hash(password, 10) : undefined;
+
     const { rows } = await pool.query(
       `UPDATE profiles SET
-        email     = COALESCE($1, email),
-        full_name = COALESCE($2, full_name),
-        phone     = COALESCE($3, phone),
-        updated_at = NOW()
-      WHERE id = $4
-      RETURNING *`,
-      [email ?? null, full_name ?? null, phone ?? null, id],
+        email         = COALESCE($1, email),
+        full_name     = COALESCE($2, full_name),
+        phone         = COALESCE($3, phone),
+        password_hash = COALESCE($4, password_hash),
+        updated_at    = NOW()
+      WHERE id = $5
+      RETURNING id, email, full_name, phone, is_active, last_login_at, created_at, updated_at`,
+      [email ?? null, full_name ?? null, phone ?? null, passwordHash ?? null, id],
     );
 
     if (rows.length === 0) throw new AppError(404, 'User not found');
@@ -111,7 +121,7 @@ router.post('/:id/deactivate', async (req: Request, res: Response, next: NextFun
 
     const { rows } = await pool.query(
       `UPDATE profiles SET is_active = false, updated_at = NOW()
-       WHERE id = $1 RETURNING *`,
+       WHERE id = $1 RETURNING id, email, full_name, phone, is_active, last_login_at, created_at, updated_at`,
       [id],
     );
     if (rows.length === 0) throw new AppError(404, 'User not found');
@@ -131,7 +141,7 @@ router.post('/:id/activate', async (req: Request, res: Response, next: NextFunct
 
     const { rows } = await pool.query(
       `UPDATE profiles SET is_active = true, updated_at = NOW()
-       WHERE id = $1 RETURNING *`,
+       WHERE id = $1 RETURNING id, email, full_name, phone, is_active, last_login_at, created_at, updated_at`,
       [id],
     );
     if (rows.length === 0) throw new AppError(404, 'User not found');

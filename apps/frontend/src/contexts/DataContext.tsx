@@ -491,7 +491,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const { amount_paid, payment_status, lead, ...transactionData } = transaction;
       return await api.post<{ transaction: Transaction; items: TransactionItem[]; lead: Lead }>(
         '/transactions',
-        { ...transactionData, items, selectedStallId, exhibition_id: currentExhibitionId }
+        {
+          transaction: { ...transactionData, exhibition_id: currentExhibitionId },
+          items,
+          selectedStallId,
+        }
       );
     },
     onSuccess: () => {
